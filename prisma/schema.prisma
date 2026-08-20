@@ -1,0 +1,272 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  DOCTOR
+  PATIENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  doctorProfile DoctorProfile?
+
+  patientAppointments Appointment[] @relation("PatientAppointments")
+  doctorAppointments  Appointment[] @relation("DoctorAppointments")
+
+  patientHolds SlotHold[] @relation("PatientHolds")
+  doctorHolds  SlotHold[] @relation("DoctorHolds")
+
+  symptomForms     SymptomForm[]
+  prescriptions    Prescription[]
+  notificationLogs NotificationLog[]
+  googleAccount    GoogleAccount?
+
+  @@index([role])
+}
+
+// -- Google Calendar OAuth -----------------------------------------------
+
+model GoogleAccount {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String
+  expiresAt             DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// -- Doctor availability ---------------------------------------------------
+
+model DoctorProfile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialisation      String
+  slotDurationMinutes Int      @default(30)
+  // Keyed by weekday, e.g. { "MON": { "start": "09:00", "end": "17:00" }, ... }
+  workingHours        Json
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  leaves DoctorLeave[]
+}
+
+model DoctorLeave {
+  id        String        @id @default(cuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      DateTime
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  @@unique([doctorId, date])
+}
+
+// -- Booking ----------------------------------------------------------------
+
+enum SlotHoldStatus {
+  ACTIVE
+  CONSUMED
+  EXPIRED
+  RELEASED
+}
+
+model SlotHold {
+  id        String         @id @default(cuid())
+  doctorId  String
+  doctor    User           @relation("DoctorHolds", fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId String
+  patient   User           @relation("PatientHolds", fields: [patientId], references: [id], onDelete: Cascade)
+  startTime DateTime
+  endTime   DateTime
+  status    SlotHoldStatus @default(ACTIVE)
+  expiresAt DateTime
+  createdAt DateTime       @default(now())
+
+  @@unique([doctorId, startTime, status])
+  @@index([expiresAt])
+}
+
+enum AppointmentStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  RESCHEDULED
+}
+
+model Appointment {
+  id                   String            @id @default(cuid())
+  doctorId             String
+  doctor               User              @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId            String
+  patient              User              @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  startTime            DateTime
+  endTime              DateTime
+  status               AppointmentStatus @default(CONFIRMED)
+  googleEventIdPatient String?
+  googleEventIdDoctor  String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  symptomForm      SymptomForm?
+  preVisitSummary  PreVisitSummary?
+  postVisitNote    PostVisitNote?
+  postVisitSummary PostVisitSummary?
+  prescriptions    Prescription[]
+
+  // Database-enforced double-booking guard.
+  @@unique([doctorId, startTime])
+  @@index([patientId])
+  @@index([doctorId, status])
+}
+
+// -- Pre-visit ----------------------------------------------------------------
+
+model SymptomForm {
+  id            String      @id @default(cuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  patientId     String
+  patient       User        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  symptoms      String
+  createdAt     DateTime    @default(now())
+
+  preVisitSummary PreVisitSummary?
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum SummaryStatus {
+  SUCCESS
+  FALLBACK
+}
+
+model PreVisitSummary {
+  id                 String        @id @default(cuid())
+  appointmentId      String        @unique
+  appointment        Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  symptomFormId      String        @unique
+  symptomForm        SymptomForm   @relation(fields: [symptomFormId], references: [id], onDelete: Cascade)
+  urgencyLevel       UrgencyLevel
+  chiefComplaint     String
+  // JSON string array of three suggested questions for the doctor.
+  suggestedQuestions Json
+  status             SummaryStatus
+  createdAt          DateTime      @default(now())
+}
+
+// -- Post-visit ----------------------------------------------------------------
+
+model PostVisitNote {
+  id            String      @id @default(cuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  notes         String
+  createdAt     DateTime    @default(now())
+
+  postVisitSummary PostVisitSummary?
+}
+
+model PostVisitSummary {
+  id              String        @id @default(cuid())
+  appointmentId   String        @unique
+  appointment     Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  postVisitNoteId String        @unique
+  postVisitNote   PostVisitNote @relation(fields: [postVisitNoteId], references: [id], onDelete: Cascade)
+  summary         String
+  status          SummaryStatus
+  createdAt       DateTime      @default(now())
+}
+
+model Prescription {
+  id              String      @id @default(cuid())
+  appointmentId   String
+  appointment     Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  patientId       String
+  patient         User        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medicationName  String
+  dosage          String
+  frequencyPerDay Int
+  durationDays    Int
+  createdAt       DateTime    @default(now())
+
+  reminders MedicationReminder[]
+
+  @@index([patientId])
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model MedicationReminder {
+  id             String         @id @default(cuid())
+  prescriptionId String
+  prescription   Prescription   @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  scheduledAt    DateTime
+  status         ReminderStatus @default(PENDING)
+  attempts       Int            @default(0)
+  createdAt      DateTime       @default(now())
+
+  @@index([status, scheduledAt])
+}
+
+// -- Notifications ----------------------------------------------------------------
+
+enum NotificationChannel {
+  EMAIL
+  CALENDAR
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  ABANDONED
+}
+
+model NotificationLog {
+  id          String              @id @default(cuid())
+  channel     NotificationChannel
+  type        String
+  recipientId String
+  recipient   User                @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  status      NotificationStatus  @default(PENDING)
+  attempts    Int                 @default(0)
+  maxAttempts Int                 @default(5)
+  nextRetryAt DateTime?
+  payload     Json
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([status, nextRetryAt])
+  @@index([recipientId])
+}

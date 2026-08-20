@@ -20,6 +20,13 @@ build
 .DS_Store
 Thumbs.db
 
+# AI tool skill caches / config (not part of the app)
+.agents
+.claude
+.windsurf
+skills-lock.json
+
 # misc
 *.log
 .turbo
+/generated/prisma
