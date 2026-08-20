@@ -52,9 +52,10 @@ export async function queueNotification(params: QueueParams): Promise<string> {
 }
 
 /** Queues a notification and attempts to send it immediately (used for user-facing flows like booking confirmation). */
-export async function sendNotification(params: QueueParams): Promise<void> {
-  const id = await queueNotification(params);
-  await attemptSend(id);
+export async function sendNotification(params: QueueParams): Promise<{ logId: string; success: boolean }> {
+  const logId = await queueNotification(params);
+  const success = await attemptSend(logId);
+  return { logId, success };
 }
 
 async function performSend(channel: NotificationChannel, payload: NotificationPayload): Promise<void> {
@@ -101,9 +102,9 @@ async function performSend(channel: NotificationChannel, payload: NotificationPa
 }
 
 /** Attempts to send a single notification log row and records the outcome. Never throws. */
-export async function attemptSend(logId: string): Promise<void> {
+export async function attemptSend(logId: string): Promise<boolean> {
   const log = await prisma.notificationLog.findUnique({ where: { id: logId } });
-  if (!log) return;
+  if (!log) return false;
 
   try {
     await performSend(log.channel, log.payload as unknown as NotificationPayload);
@@ -111,6 +112,7 @@ export async function attemptSend(logId: string): Promise<void> {
       where: { id: log.id },
       data: { status: "SENT", attempts: { increment: 1 }, nextRetryAt: null },
     });
+    return true;
   } catch (error) {
     const attempts = log.attempts + 1;
     const maxAttempts = log.maxAttempts || DEFAULT_MAX_ATTEMPTS;
@@ -133,6 +135,7 @@ export async function attemptSend(logId: string): Promise<void> {
     }
 
     console.error(`Notification ${log.id} (${log.channel}/${log.type}) failed:`, error);
+    return false;
   }
 }
 
